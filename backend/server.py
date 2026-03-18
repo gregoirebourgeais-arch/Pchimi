@@ -229,6 +229,156 @@ async def get_grocery_list(week_start: date = Query(..., description="Lundi de l
 
 app.include_router(api_router)
 
+@api_router.post("/recipes/import/xlsx", response_model=List[Recipe])
+async def import_recipes_xlsx(file: UploadFile = File(...)):
+    if not file.filename or not file.filename.lower().endswith((".xlsx", ".xls")):
+        raise HTTPException(status_code=400, detail="Fichier Excel requis (.xlsx ou .xls)")
+
+    content = await file.read()
+    try:
+        dataframe = pd.read_excel(BytesIO(content))
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Impossible de lire le fichier Excel: {exc}") from exc
+
+    expected_columns = {"name", "category", "ingredients", "steps"}
+    if not expected_columns.issubset(set(map(str, dataframe.columns))):
+        raise HTTPException(status_code=400, detail="Colonnes requises dans le fichier Excel: name, category, ingredients, steps")
+
+    records = dataframe.fillna("").to_dict(orient="records")
+    created = parse_table_records(records)
+    with db_lock:
+        with get_connection() as connection:
+            for recipe in created:
+                serialized = serialize_recipe(recipe)
+                connection.execute(
+                    "INSERT INTO recipes (id, name, category, ingredients_json, steps_json, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                    (
+                        serialized["id"],
+                        serialized["name"],
+                        serialized["category"],
+                        serialized["ingredients_json"],
+                        serialized["steps_json"],
+                        serialized["created_at"],
+                    ),
+                )
+    return created
+
+
+@api_router.get("/menu-plan", response_model=MenuPlan)
+async def get_menu_plan(week_start: date = Query(..., description="Lundi de la semaine")):
+    with db_lock:
+        with get_connection() as connection:
+            row = connection.execute(
+                "SELECT week_start, days_json, updated_at FROM menu_plans WHERE week_start = ?",
+                (week_start.isoformat(),),
+            ).fetchone()
+
+    if row:
+        return MenuPlan(
+            week_start=date.fromisoformat(row["week_start"]),
+            days=json.loads(row["days_json"]),
+            updated_at=datetime.fromisoformat(row["updated_at"]),
+        )
+
+    default_days = {day: DayMeals().model_dump() for day in week_dates(week_start)}
+    return MenuPlan(week_start=week_start, days=default_days)
+
+
+@api_router.put("/menu-plan/{week_start}", response_model=MenuPlan)
+async def update_menu_plan(week_start: date, payload: MenuPlanUpdate):
+    expected_dates = set(week_dates(week_start))
+    provided_dates = set(payload.days.keys())
+    if not expected_dates.issubset(provided_dates):
+        raise HTTPException(status_code=400, detail="Les 7 jours de la semaine doivent être fournis.")
+
+    plan = MenuPlan(week_start=week_start, days=payload.days)
+    with db_lock:
+        with get_connection() as connection:
+            connection.execute(
+                """
+                INSERT INTO menu_plans (week_start, days_json, updated_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(week_start) DO UPDATE SET
+                    days_json = excluded.days_json,
+                    updated_at = excluded.updated_at
+                """,
+                (week_start.isoformat(), json.dumps(payload.days, ensure_ascii=False), plan.updated_at.isoformat()),
+            )
+    return plan
+
+
+def compute_grocery_sections(week_start: date) -> List[GrocerySection]:
+    with db_lock:
+        with get_connection() as connection:
+            plan_row = connection.execute(
+                "SELECT days_json FROM menu_plans WHERE week_start = ?",
+                (week_start.isoformat(),),
+            ).fetchone()
+
+    if not plan_row:
+        return []
+
+    days = json.loads(plan_row["days_json"])
+    recipe_ids: set[str] = set()
+    for day in days.values():
+        for meal_key in ["breakfast", "lunch", "dinner"]:
+            for item in day.get(meal_key, []):
+                if item.get("recipe_id"):
+                    recipe_ids.add(item["recipe_id"])
+
+    if not recipe_ids:
+        return []
+
+    placeholders = ",".join("?" for _ in recipe_ids)
+    with db_lock:
+        with get_connection() as connection:
+            rows = connection.execute(f"SELECT * FROM recipes WHERE id IN ({placeholders})", tuple(recipe_ids)).fetchall()
+
+    aggregated: Dict[tuple[str, str], float] = {}
+    for row in rows:
+        ingredients = json.loads(row["ingredients_json"])
+        for ingredient in ingredients:
+            key = (ingredient["name"].strip().lower(), ingredient["unit"].strip().lower())
+            aggregated[key] = aggregated.get(key, 0.0) + float(ingredient["quantity"])
+
+    mapping = load_aisle_mapping()
+    grouped: Dict[str, List[GroceryItem]] = {}
+    for (name, unit), quantity in sorted(aggregated.items(), key=lambda entry: entry[0][0]):
+        section = detect_section(name, mapping)
+        grouped.setdefault(section, []).append(GroceryItem(name=name.title(), quantity=round(quantity, 2), unit=unit))
+
+    return [GrocerySection(section=section, items=items) for section, items in sorted(grouped.items(), key=lambda entry: entry[0])]
+
+
+@api_router.get("/grocery-list", response_model=GroceryListResponse)
+async def get_grocery_list(week_start: date = Query(..., description="Lundi de la semaine")):
+    sections = compute_grocery_sections(week_start)
+    return GroceryListResponse(week_start=week_start, sections=sections)
+
+
+@api_router.get("/grocery-list/pdf")
+async def get_grocery_list_pdf(week_start: date = Query(..., description="Lundi de la semaine")):
+    sections = compute_grocery_sections(week_start)
+    lines: list[str] = []
+    for section in sections:
+        lines.append(f"[{section.section}]")
+        for item in section.items:
+            lines.append(f"- {item.name}: {item.quantity} {item.unit}")
+        lines.append("")
+
+    if not lines:
+        lines = ["Aucune course pour cette semaine"]
+
+    pdf_bytes = build_simple_pdf(f"Liste de courses - {week_start.isoformat()}", lines)
+    filename = f"liste-courses-{week_start.isoformat()}.pdf"
+    return StreamingResponse(
+        BytesIO(pdf_bytes),
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+app.include_router(api_router)
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=True,
