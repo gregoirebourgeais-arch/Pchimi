@@ -1,1 +1,138 @@
-/* App-specific styles */
+.planner-page {
+  min-height: 100vh;
+  padding: 1.5rem;
+  background: #f7fafc;
+}
+
+.planner-header {
+  max-width: 960px;
+  margin: 0 auto 1rem auto;
+}
+
+.planner-header h1 {
+  margin: 0 0 0.5rem;
+}
+
+.planner-grid {
+  max-width: 1200px;
+  margin: 0 auto;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 1rem;
+}
+
+.card {
+  background: #fff;
+  border-radius: 12px;
+  padding: 1rem;
+  border: 1px solid #dbe4ea;
+  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.08);
+}
+
+.two-col {
+  grid-column: span 2;
+}
+
+@media (max-width: 960px) {
+  .two-col {
+    grid-column: span 1;
+  }
+}
+
+.week-actions,
+.inline-form {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.week-days {
+  margin-top: 0.75rem;
+  display: grid;
+  gap: 0.5rem;
+  grid-template-columns: repeat(auto-fit, minmax(145px, 1fr));
+}
+
+.day-button {
+  border: 1px solid #ccd7e0;
+  background: #fff;
+  border-radius: 8px;
+  padding: 0.5rem;
+  text-align: left;
+}
+
+.day-button.active {
+  border-color: #1976d2;
+  background: #e8f1fb;
+}
+
+.meal-section {
+  border-top: 1px solid #e2e8f0;
+  margin-top: 0.75rem;
+  padding-top: 0.75rem;
+}
+
+.meal-section ul,
+.grocery-list {
+  list-style: none;
+  padding: 0;
+}
+
+.meal-section li {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+  border: 1px solid #d5dee7;
+  border-radius: 8px;
+  padding: 0.4rem 0.6rem;
+  margin-bottom: 0.4rem;
+}
+
+.stack-form,
+.recipe-list,
+.card textarea {
+  width: 100%;
+}
+
+.stack-form {
+  display: grid;
+  gap: 0.5rem;
+}
+
+input,
+select,
+textarea,
+button {
+  font: inherit;
+  border-radius: 8px;
+  border: 1px solid #cbd5e1;
+  padding: 0.55rem 0.65rem;
+}
+
+button {
+  cursor: pointer;
+  background: #0f62fe;
+  color: #fff;
+  border-color: #0f62fe;
+}
+
+button:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+}
+
+.error-banner {
+  max-width: 1200px;
+  margin: 0 auto 1rem;
+  background: #ffe7e7;
+  color: #8c1c1c;
+  border: 1px solid #e5b7b7;
+  border-radius: 10px;
+  padding: 0.75rem;
+}
+
+.helper {
+  font-size: 0.9rem;
+  color: #334155;
+}
