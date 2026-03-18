@@ -8,6 +8,7 @@ const MEALS = [
 ];
 
 const ITEM_TYPES = ["Viennoiserie", "Entrée", "Plat principal", "Dessert", "Boisson", "Autre"];
+
 const weekdayFormatter = new Intl.DateTimeFormat("fr-FR", { weekday: "long", day: "numeric", month: "short" });
 
 const getWeekStart = (input = new Date()) => {
@@ -54,13 +55,8 @@ function MenuPlanner() {
   const [selectedDate, setSelectedDate] = useState(() => toISODate(getWeekStart()));
   const [recipes, setRecipes] = useState([]);
   const [planDays, setPlanDays] = useState(() => normalizePlan(getWeekStart()));
-  const [grocerySections, setGrocerySections] = useState([]);
-  const [aisleMapping, setAisleMapping] = useState({});
-
+  const [groceryList, setGroceryList] = useState([]);
   const [importPayload, setImportPayload] = useState("");
-  const [csvImportPayload, setCsvImportPayload] = useState("name,category,ingredients,steps\nPancakes,Petit-déjeuner,Farine|200|g;Lait|300|ml,Mélanger|Cuire");
-  const [xlsxFile, setXlsxFile] = useState(null);
-
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
 
@@ -93,12 +89,7 @@ function MenuPlanner() {
 
   const loadGroceryList = async (startDate = weekStart) => {
     const { data } = await axios.get("/api/grocery-list", { params: { week_start: toISODate(startDate) } });
-    setGrocerySections(data.sections ?? []);
-  };
-
-  const loadAisleMapping = async () => {
-    const { data } = await axios.get("/api/aisle-mapping");
-    setAisleMapping(data || {});
+    setGroceryList(data.items ?? []);
   };
 
   useEffect(() => {
@@ -108,7 +99,6 @@ function MenuPlanner() {
         await loadRecipes();
         await loadPlan(weekStart);
         await loadGroceryList(weekStart);
-        await loadAisleMapping();
       } catch (err) {
         setError(err.response?.data?.detail || "Impossible de charger les données.");
       }
@@ -187,61 +177,8 @@ function MenuPlanner() {
       setImportPayload("");
       await loadRecipes();
     } catch (err) {
-      setError(err.response?.data?.detail || "Import JSON impossible.");
+      setError(err.response?.data?.detail || "Import impossible. JSON invalide ou schéma incorrect.");
     }
-  };
-
-  const importRecipesCsv = async () => {
-    try {
-      setError("");
-      await axios.post("/api/recipes/import/csv", { csv_text: csvImportPayload });
-      await loadRecipes();
-    } catch (err) {
-      setError(err.response?.data?.detail || "Import CSV impossible.");
-    }
-  };
-
-  const importRecipesXlsx = async () => {
-    if (!xlsxFile) {
-      setError("Sélectionne un fichier Excel avant import.");
-      return;
-    }
-
-    try {
-      setError("");
-      const formData = new FormData();
-      formData.append("file", xlsxFile);
-      await axios.post("/api/recipes/import/xlsx", formData, {
-        headers: { "Content-Type": "multipart/form-data" },
-      });
-      await loadRecipes();
-    } catch (err) {
-      setError(err.response?.data?.detail || "Import Excel impossible.");
-    }
-  };
-
-  const saveAisleMapping = async () => {
-    try {
-      setError("");
-      await axios.put("/api/aisle-mapping", { mapping: aisleMapping });
-      await loadGroceryList();
-      await loadAisleMapping();
-    } catch (err) {
-      setError(err.response?.data?.detail || "Impossible de sauvegarder les rayons.");
-    }
-  };
-
-  const updateAisleKeywords = (section, value) => {
-    const keywords = value
-      .split(",")
-      .map((item) => item.trim().toLowerCase())
-      .filter(Boolean);
-    setAisleMapping((prev) => ({ ...prev, [section]: keywords }));
-  };
-
-  const downloadGroceryPdf = () => {
-    const weekStartIso = toISODate(weekStart);
-    window.open(`/api/grocery-list/pdf?week_start=${weekStartIso}`, "_blank");
   };
 
   const addMealItem = async (mealKey) => {
@@ -284,7 +221,7 @@ function MenuPlanner() {
     <main className="planner-page">
       <header className="planner-header">
         <h1>Planification des menus familiaux</h1>
-        <p>Base de recettes, plan hebdomadaire / journalier, courses auto + export PDF.</p>
+        <p>Base de recettes, plan hebdomadaire / journalier, et génération automatique de la liste de courses.</p>
       </header>
 
       {error && <p className="error-banner">{error}</p>}
@@ -299,9 +236,15 @@ function MenuPlanner() {
           </div>
           <div className="week-days">
             {weekDates.map((isoDate) => (
-              <button key={isoDate} className={`day-button ${selectedDate === isoDate ? "active" : ""}`} onClick={() => setSelectedDate(isoDate)}>
+              <button
+                key={isoDate}
+                className={`day-button ${selectedDate === isoDate ? "active" : ""}`}
+                onClick={() => setSelectedDate(isoDate)}
+              >
                 <span>{weekdayFormatter.format(new Date(`${isoDate}T00:00:00`))}</span>
-                <small>{MEALS.reduce((total, meal) => total + (planDays[isoDate]?.[meal.key]?.length ?? 0), 0)} item(s)</small>
+                <small>
+                  {MEALS.reduce((total, meal) => total + (planDays[isoDate]?.[meal.key]?.length ?? 0), 0)} item(s)
+                </small>
               </button>
             ))}
           </div>
@@ -324,19 +267,35 @@ function MenuPlanner() {
                 ))}
               </ul>
               <div className="inline-form">
-                <input placeholder="Libellé (optionnel si recette)" value={mealForm.label} onChange={(event) => setMealForm((prev) => ({ ...prev, label: event.target.value }))} />
-                <select value={mealForm.item_type} onChange={(event) => setMealForm((prev) => ({ ...prev, item_type: event.target.value }))}>
+                <input
+                  placeholder="Libellé (optionnel si recette)"
+                  value={mealForm.label}
+                  onChange={(event) => setMealForm((prev) => ({ ...prev, label: event.target.value }))}
+                />
+                <select
+                  value={mealForm.item_type}
+                  onChange={(event) => setMealForm((prev) => ({ ...prev, item_type: event.target.value }))}
+                >
                   {ITEM_TYPES.map((type) => (
-                    <option key={type} value={type}>{type}</option>
+                    <option key={type} value={type}>
+                      {type}
+                    </option>
                   ))}
                 </select>
-                <select value={mealForm.recipe_id} onChange={(event) => setMealForm((prev) => ({ ...prev, recipe_id: event.target.value }))}>
+                <select
+                  value={mealForm.recipe_id}
+                  onChange={(event) => setMealForm((prev) => ({ ...prev, recipe_id: event.target.value }))}
+                >
                   <option value="">Sans recette</option>
                   {recipes.map((recipe) => (
-                    <option key={recipe.id} value={recipe.id}>{recipe.name}</option>
+                    <option key={recipe.id} value={recipe.id}>
+                      {recipe.name}
+                    </option>
                   ))}
                 </select>
-                <button onClick={() => addMealItem(meal.key)} disabled={saving}>Ajouter</button>
+                <button onClick={() => addMealItem(meal.key)} disabled={saving}>
+                  Ajouter
+                </button>
               </div>
             </div>
           ))}
@@ -345,23 +304,43 @@ function MenuPlanner() {
         <article className="card">
           <h2>Créer une recette</h2>
           <form onSubmit={createRecipe} className="stack-form">
-            <input value={recipeForm.name} onChange={(event) => setRecipeForm((prev) => ({ ...prev, name: event.target.value }))} placeholder="Nom de la recette" required />
-            <input value={recipeForm.category} onChange={(event) => setRecipeForm((prev) => ({ ...prev, category: event.target.value }))} placeholder="Catégorie" />
-            <textarea value={recipeForm.ingredientsText} onChange={(event) => setRecipeForm((prev) => ({ ...prev, ingredientsText: event.target.value }))} placeholder={"Ingrédients (1 par ligne)\nformat: nom;quantité;unité"} rows={5} />
-            <textarea value={recipeForm.stepsText} onChange={(event) => setRecipeForm((prev) => ({ ...prev, stepsText: event.target.value }))} placeholder={"Étapes (1 par ligne)"} rows={5} />
+            <input
+              value={recipeForm.name}
+              onChange={(event) => setRecipeForm((prev) => ({ ...prev, name: event.target.value }))}
+              placeholder="Nom de la recette"
+              required
+            />
+            <input
+              value={recipeForm.category}
+              onChange={(event) => setRecipeForm((prev) => ({ ...prev, category: event.target.value }))}
+              placeholder="Catégorie"
+            />
+            <textarea
+              value={recipeForm.ingredientsText}
+              onChange={(event) => setRecipeForm((prev) => ({ ...prev, ingredientsText: event.target.value }))}
+              placeholder={"Ingrédients (1 par ligne)\nformat: nom;quantité;unité\nex: Farine;250;g"}
+              rows={5}
+            />
+            <textarea
+              value={recipeForm.stepsText}
+              onChange={(event) => setRecipeForm((prev) => ({ ...prev, stepsText: event.target.value }))}
+              placeholder={"Étapes (1 par ligne)\nex: Mélanger les ingrédients"}
+              rows={5}
+            />
             <button type="submit">Enregistrer la recette</button>
           </form>
         </article>
 
         <article className="card">
-          <h2>Importer des recettes</h2>
-          <p className="helper">JSON, CSV et Excel doivent contenir: name, category, ingredients, steps.</p>
-          <textarea value={importPayload} onChange={(event) => setImportPayload(event.target.value)} rows={6} placeholder="JSON: [{...}]" />
-          <button onClick={importRecipes}>Importer JSON</button>
-          <textarea value={csvImportPayload} onChange={(event) => setCsvImportPayload(event.target.value)} rows={6} />
-          <button onClick={importRecipesCsv}>Importer CSV</button>
-          <input type="file" accept=".xlsx,.xls" onChange={(event) => setXlsxFile(event.target.files?.[0] || null)} />
-          <button onClick={importRecipesXlsx}>Importer Excel</button>
+          <h2>Importer des recettes (JSON)</h2>
+          <p className="helper">Attendu: tableau d'objets {'{name, category, ingredients:[{name,quantity,unit}], steps:[...]}'}</p>
+          <textarea
+            value={importPayload}
+            onChange={(event) => setImportPayload(event.target.value)}
+            rows={8}
+            placeholder='[{"name":"Pancakes","category":"Petit-déjeuner","ingredients":[{"name":"Farine","quantity":200,"unit":"g"}],"steps":["Mélanger","Cuire"]}]'
+          />
+          <button onClick={importRecipes}>Importer</button>
         </article>
 
         <article className="card two-col">
@@ -369,9 +348,17 @@ function MenuPlanner() {
           <div className="recipe-list">
             {recipes.map((recipe) => (
               <details key={recipe.id}>
-                <summary>{recipe.name} <small>({recipe.category})</small></summary>
-                <p><strong>Ingrédients:</strong> {recipe.ingredients.map((item) => `${item.name} ${item.quantity} ${item.unit}`).join(", ")}</p>
-                <ol>{recipe.steps.map((step) => <li key={step}>{step}</li>)}</ol>
+                <summary>
+                  {recipe.name} <small>({recipe.category})</small>
+                </summary>
+                <p>
+                  <strong>Ingrédients:</strong> {recipe.ingredients.map((item) => `${item.name} ${item.quantity} ${item.unit}`).join(", ")}
+                </p>
+                <ol>
+                  {recipe.steps.map((step) => (
+                    <li key={step}>{step}</li>
+                  ))}
+                </ol>
               </details>
             ))}
           </div>
@@ -379,37 +366,15 @@ function MenuPlanner() {
 
         <article className="card two-col">
           <h2>Liste de courses (auto)</h2>
-          <div className="inline-form">
-            <button onClick={() => loadGroceryList()}>Régénérer</button>
-            <button onClick={downloadGroceryPdf}>Exporter PDF</button>
-          </div>
+          <button onClick={() => loadGroceryList()}>Régénérer</button>
           <ul className="grocery-list">
-            {grocerySections.length === 0 && <li>Aucune course: ajoute des recettes dans les repas de la semaine.</li>}
-            {grocerySections.map((section) => (
-              <li key={section.section}>
-                <strong>{section.section}</strong>
-                <ul>
-                  {section.items.map((item) => (
-                    <li key={`${section.section}-${item.name}-${item.unit}`}>{item.name}: {item.quantity} {item.unit}</li>
-                  ))}
-                </ul>
+            {groceryList.length === 0 && <li>Aucune course: ajoute des recettes dans les repas de la semaine.</li>}
+            {groceryList.map((item) => (
+              <li key={`${item.name}-${item.unit}`}>
+                {item.name}: {item.quantity} {item.unit}
               </li>
             ))}
           </ul>
-        </article>
-
-        <article className="card two-col">
-          <h2>Configuration des rayons</h2>
-          <p className="helper">Mots-clés séparés par virgules pour classer automatiquement les ingrédients.</p>
-          <div className="stack-form">
-            {Object.entries(aisleMapping).map(([section, keywords]) => (
-              <label key={section}>
-                <strong>{section}</strong>
-                <textarea rows={2} value={keywords.join(", ")} onChange={(event) => updateAisleKeywords(section, event.target.value)} />
-              </label>
-            ))}
-          </div>
-          <button onClick={saveAisleMapping}>Sauvegarder les rayons</button>
         </article>
       </section>
     </main>
